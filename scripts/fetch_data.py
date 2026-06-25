@@ -17,41 +17,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.hyperliquid import (
-    SEED_ADDRESSES,
+    discover_active_addresses,
     fetch_address_fills_batch,
     get_all_mids,
 )
-
-
-def discover_active_addresses(
-    target_coins: list[str] | None = None,
-    max_addresses: int = 100,
-) -> list[str]:
-    """Discover active trader addresses on Hyperliquid.
-
-    Since Hyperliquid doesn't expose a direct top-traders endpoint,
-    we use a multi-strategy approach:
-
-    1. Use open interest data to find high-value positions
-    2. Use public order book to find active market makers
-    3. Fall back to seed addresses + manual curation
-
-    For the MVP, we'll start with known active addresses from the
-    Hyperliquid ecosystem and expand as we develop.
-    """
-    print("[*] Discovering active addresses...")
-    print(f"[*] Using {len(SEED_ADDRESSES)} seed addresses (placeholder)")
-    print("[!] TODO: Implement real address discovery via:")
-    print("    - Hyperliquid subgraph/indexer")
-    print("    - External data providers")
-    print("    - Order book analysis")
-
-    # For now, return seed addresses
-    # In production, replace with:
-    # 1. Query Hyperliquid's recent trades
-    # 2. Extract unique addresses
-    # 3. Filter by volume/frequency
-    return SEED_ADDRESSES[:max_addresses]
 
 
 def fetch_and_save(
@@ -128,7 +97,7 @@ def main():
 
     # Discover addresses
     addresses = discover_active_addresses(max_addresses=args.top_n)
-    print(f"    Will attempt to fetch {len(addresses)} addresses")
+    print(f"[*] Will fetch {len(addresses)} addresses")
 
     # Fetch
     fetch_and_save(

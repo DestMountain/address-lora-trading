@@ -52,10 +52,10 @@ def load_data(data_dir: str) -> list[TradeSequence]:
             continue
 
         # Reconstruct Fill objects (dict -> Fill)
+        # Reconstruct Fill objects (dict -> Fill)
         from src.data.hyperliquid import Fill
         fills = []
         for item in fills_data:
-            # Handle both dict and Fill serialization
             if isinstance(item, dict):
                 try:
                     fills.append(Fill(
@@ -64,14 +64,14 @@ def load_data(data_dir: str) -> list[TradeSequence]:
                         sz=float(item.get("sz", 0)),
                         side=item.get("side", ""),
                         time=int(item.get("time", 0)),
-                        start_position=float(item.get("start_position", "startPosition", 0)),
+                        start_position=float(item.get("start_position", 0)),
                         dir=item.get("dir", ""),
-                        closed_pnl=float(item.get("closed_pnl", "closedPnl", 0)),
+                        closed_pnl=float(item.get("closed_pnl", 0)),
                         hash=item.get("hash", ""),
                         oid=int(item.get("oid", 0)),
                         fee=float(item.get("fee", 0)),
                         tid=int(item.get("tid", 0)),
-                        fee_token=item.get("fee_token", "feeToken", ""),
+                        fee_token=item.get("fee_token", ""),
                     ))
                 except (ValueError, TypeError) as e:
                     continue
@@ -114,7 +114,7 @@ def train_lstm(
 
     # Create sequences
     print("[*] Creating training sequences...")
-    X, y_action, y_price = create_sequences_for_training(
+    X, y_action, y_price, y_size = create_sequences_for_training(
         sequences, seq_length=seq_length
     )
     print(f"    {len(X)} samples, {X.shape[2]} features, seq_len={seq_length}")
@@ -132,11 +132,13 @@ def train_lstm(
         torch.FloatTensor(X[train_idx]),
         torch.LongTensor(y_action[train_idx]),
         torch.FloatTensor(y_price[train_idx]),
+        torch.FloatTensor(y_size[train_idx]),
     )
     val_dataset = TensorDataset(
         torch.FloatTensor(X[val_idx]),
         torch.LongTensor(y_action[val_idx]),
         torch.FloatTensor(y_price[val_idx]),
+        torch.FloatTensor(y_size[val_idx]),
     )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

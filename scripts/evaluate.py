@@ -41,7 +41,7 @@ def main():
     print(f"\n[*] Loaded {len(sequences)} sequences for evaluation")
 
     # Create test sequences
-    X, y_action, y_price = create_sequences_for_training(
+    X, y_action, y_price, y_size = create_sequences_for_training(
         sequences, seq_length=args.seq_length
     )
     print(f"    {len(X)} test samples")
@@ -51,6 +51,7 @@ def main():
         torch.FloatTensor(X),
         torch.LongTensor(y_action),
         torch.FloatTensor(y_price),
+        torch.FloatTensor(y_size),
     )
     loader = DataLoader(dataset, batch_size=64, shuffle=False)
 
@@ -73,8 +74,8 @@ def main():
         all_price_true = []
 
         with torch.no_grad():
-            for bx, by_a, by_p in loader:
-                logits, pp = model(bx)
+            for bx, by_a, by_p, by_sz in loader:
+                logits, pp, ps = model(bx)
                 all_preds.extend(logits.argmax(dim=-1).numpy())
                 all_true.extend(by_a.numpy())
                 all_price_pred.extend(pp.squeeze().numpy())

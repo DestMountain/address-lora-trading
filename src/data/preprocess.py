@@ -146,14 +146,17 @@ def make_time_features(timestamps: np.ndarray) -> np.ndarray:
 
     Returns:
         (seq_len, 3) array: [time_delta_seconds, hour_of_day, day_of_week]
+        All normalized to roughly [-1, 1] or [0, 1] range.
     """
     deltas = np.zeros_like(timestamps, dtype=np.float32)
     deltas[1:] = (timestamps[1:] - timestamps[:-1]).astype(np.float32) / 1000.0  # ms → s
+    # Log-transform time deltas to handle wide range
+    deltas = np.log1p(deltas) / 10.0  # Normalize roughly to [0, ~1.4]
 
-    # Time-of-day and day-of-week (normalized)
+    # Time-of-day and day-of-week (normalized to [0, 1])
     seconds = timestamps.astype(np.float32) / 1000.0
-    hours = (seconds % 86400) / 86400.0       # 0-1
-    days = (seconds // 86400) % 7 / 7.0       # 0-1
+    hours = (seconds % 86400) / 86400.0
+    days = (seconds // 86400) % 7 / 7.0
 
     return np.column_stack([deltas, hours, days])
 
@@ -162,7 +165,7 @@ def create_sequences_for_training(
     sequences: list[TradeSequence],
     seq_length: int = 32,
     stride: int = 8,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Create sliding-window training samples from trade sequences.
 
     For each address, creates overlapping windows of `seq_length` trades,
@@ -171,40 +174,53 @@ def create_sequences_for_training(
     Returns:
         X: (n_samples, seq_length, feature_dim) input features
         y_action: (n_samples,) next action labels
-        y_price: (n_samples,) next price delta
+        y_price: (n_samples,) next price delta (normalized)
+        y_size: (n_samples,) next trade size (normalized)
     """
     all_X = []
     all_y_action = []
     all_y_price = []
+    all_y_size = []
 
     for seq in sequences:
         n = seq.length
         if n < seq_length + 1:
             continue
 
-        # Build features: [time_features, action_onehot, price_delta, size]
+        # Normalize price deltas: clip to [-1, 1] range to avoid blowup
+        price_deltas_clipped = np.clip(seq.price_deltas, -1.0, 1.0)
+
+        # Normalize sizes: Z-score per-address to handle different scales
+        size_mean = seq.sizes.mean()
+        size_std = seq.sizes.std() + 1e-8
+        sizes_norm = (seq.sizes - size_mean) / size_std
+
+        # Build features: [time_features, action_onehot, price_delta_clipped, size_norm]
         time_feat = make_time_features(seq.timestamps)  # (n, 3)
         action_onehot = np.eye(NUM_ACTIONS)[seq.actions]  # (n, 5)
-        price_delta = seq.price_deltas.reshape(-1, 1)     # (n, 1)
-        size_feat = seq.sizes.reshape(-1, 1)              # (n, 1)
+        price_feat = price_deltas_clipped.reshape(-1, 1)     # (n, 1)
+        size_feat = sizes_norm.reshape(-1, 1)              # (n, 1)
 
-        features = np.concatenate([time_feat, action_onehot, price_delta, size_feat], axis=1)
+        features = np.concatenate([time_feat, action_onehot, price_feat, size_feat], axis=1)
         # feature_dim = 3 + 5 + 1 + 1 = 10
 
         for i in range(0, n - seq_length, stride):
-            X = features[i:i + seq_length]               # (seq_length, feature_dim)
-            y_action = seq.actions[i + seq_length]        # next action
-            y_price = seq.price_deltas[i + seq_length]    # next price delta
+            X = features[i:i + seq_length]
+            y_action = seq.actions[i + seq_length]
+            y_price = price_deltas_clipped[i + seq_length]
+            y_size = sizes_norm[i + seq_length]
 
             all_X.append(X)
             all_y_action.append(y_action)
             all_y_price.append(y_price)
+            all_y_size.append(y_size)
 
     if not all_X:
-        return np.array([]), np.array([]), np.array([])
+        return np.array([]), np.array([]), np.array([]), np.array([])
 
     return (
         np.array(all_X, dtype=np.float32),
         np.array(all_y_action, dtype=np.int64),
         np.array(all_y_price, dtype=np.float32),
+        np.array(all_y_size, dtype=np.float32),
     )

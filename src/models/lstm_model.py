@@ -54,11 +54,17 @@ class TradeLSTM(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
 
+        self.size_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+
     def forward(
         self,
         x: torch.Tensor,
         return_hidden: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
@@ -77,19 +83,20 @@ class TradeLSTM(nn.Module):
         # Two heads
         action_logits = self.action_head(last_hidden)
         price_pred = self.price_head(last_hidden)
+        size_pred = self.size_head(last_hidden)
 
         if return_hidden:
-            return action_logits, price_pred, last_hidden
-        return action_logits, price_pred
+            return action_logits, price_pred, size_pred, last_hidden
+        return action_logits, price_pred, size_pred
 
     def predict_action(self, x: torch.Tensor) -> torch.Tensor:
         """Get action predictions (argmax)."""
-        logits, _ = self.forward(x)
+        logits, _, _ = self.forward(x)
         return logits.argmax(dim=-1)
 
     def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
         """Get action probabilities."""
-        logits, _ = self.forward(x)
+        logits, _, _ = self.forward(x)
         return F.softmax(logits, dim=-1)
 
 
@@ -118,10 +125,10 @@ class AddressLoRA(nn.Module):
         self.lora_action_A = nn.Parameter(torch.randn(NUM_ACTIONS, rank) * 0.01)
         self.lora_action_B = nn.Parameter(torch.randn(rank, NUM_ACTIONS) * 0.01)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward with LoRA adaptation."""
         # Base model forward
-        _, _, hidden = self.base_model.forward(x, return_hidden=True)
+        _, _, _, hidden = self.base_model.forward(x, return_hidden=True)
 
         # LoRA adaptation on hidden state
         lora_delta = hidden @ self.lora_A @ self.lora_B
@@ -135,8 +142,9 @@ class AddressLoRA(nn.Module):
 
         # Price head (no LoRA - just use adapted hidden)
         price_pred = self.base_model.price_head(adapted_hidden)
+        size_pred = self.base_model.size_head(adapted_hidden)
 
-        return action_logits, price_pred
+        return action_logits, price_pred, size_pred
 
 
 def train_epoch(
@@ -148,7 +156,7 @@ def train_epoch(
 ) -> dict[str, float]:
     """Train for one epoch.
 
-    Loss = alpha * CrossEntropy(action) + (1-alpha) * MSE(price)
+    Loss = alpha * CrossEntropy(action) + (1-alpha) * MSE(price + size)
     """
     model.train()
     total_loss = 0.0
@@ -157,18 +165,20 @@ def train_epoch(
     correct = 0
     total = 0
 
-    for batch_x, batch_y_action, batch_y_price in dataloader:
+    for batch_x, batch_y_action, batch_y_price, batch_y_size in dataloader:
         batch_x = batch_x.to(device)
         batch_y_action = batch_y_action.to(device)
         batch_y_price = batch_y_price.to(device).float()
+        batch_y_size = batch_y_size.to(device).float()
 
         optimizer.zero_grad()
 
-        logits, price_pred = model(batch_x)
+        logits, price_pred, size_pred = model(batch_x)
 
         action_loss = F.cross_entropy(logits, batch_y_action)
         price_loss = F.mse_loss(price_pred.squeeze(), batch_y_price)
-        loss = alpha * action_loss + (1 - alpha) * price_loss
+        size_loss = F.mse_loss(size_pred.squeeze(), batch_y_size)
+        loss = alpha * action_loss + (1 - alpha) / 2 * price_loss + (1 - alpha) / 2 * size_loss
 
         loss.backward()
         optimizer.step()
@@ -203,16 +213,18 @@ def evaluate(
     price_errors = []
 
     with torch.no_grad():
-        for batch_x, batch_y_action, batch_y_price in dataloader:
+        for batch_x, batch_y_action, batch_y_price, batch_y_size in dataloader:
             batch_x = batch_x.to(device)
             batch_y_action = batch_y_action.to(device)
             batch_y_price = batch_y_price.to(device).float()
+            batch_y_size = batch_y_size.to(device).float()
 
-            logits, price_pred = model(batch_x)
+            logits, price_pred, size_pred = model(batch_x)
 
             action_loss = F.cross_entropy(logits, batch_y_action)
             price_loss = F.mse_loss(price_pred.squeeze(), batch_y_price)
-            loss = alpha * action_loss + (1 - alpha) * price_loss
+            size_loss = F.mse_loss(size_pred.squeeze(), batch_y_size)
+            loss = alpha * action_loss + (1 - alpha) / 2 * price_loss + (1 - alpha) / 2 * size_loss
 
             total_loss += loss.item()
             preds = logits.argmax(dim=-1)

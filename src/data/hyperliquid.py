@@ -157,7 +157,47 @@ def get_open_interest(coin: str) -> float:
 # In production, we'd dynamically discover top addresses via
 # the exchange's order book or subgraph data.
 
-SEED_ADDRESSES = [
-    # Major market makers / high-volume traders
-    "0x0000000000000000000000000000000000000001",  # placeholder - replace with real data
-]
+def discover_active_addresses(
+    target_coins: list[str] | None = None,
+    max_addresses: int = 100,
+) -> list[str]:
+    """Discover active trader addresses from recent trades.
+
+    Strategy: query recentTrades for major coins, extract unique users.
+
+    Args:
+        target_coins: List of coin symbols to query. Defaults to major pairs.
+        max_addresses: Maximum number of unique addresses to return.
+
+    Returns:
+        List of unique wallet addresses sorted by activity frequency.
+    """
+    if target_coins is None:
+        target_coins = ["ETH", "BTC", "SOL", "HYPE", "ARB", "OP", "DOGE", "PURR", "AAVE", "LINK"]
+
+    from collections import Counter
+    address_counter: Counter = Counter()
+
+    print(f"[*] Discovering active addresses from {len(target_coins)} coins...")
+    for coin in target_coins:
+        try:
+            data = _post("", {
+                "type": "recentTrades",
+                "coin": coin,
+            })
+            for trade in data:
+                for user in trade.get("users", []):
+                    if isinstance(user, str) and user.startswith("0x"):
+                        address_counter[user] += 1
+        except Exception as e:
+            print(f"  [WARN] Failed to fetch trades for {coin}: {e}")
+
+    # Remove zero address
+    zero_addr = "0x0000000000000000000000000000000000000000"
+    address_counter.pop(zero_addr, None)
+
+    top = address_counter.most_common(max_addresses)
+    print(f"    Found {len(address_counter)} unique addresses, taking top {min(max_addresses, len(top))}")
+
+    addresses = [addr for addr, _ in top]
+    return addresses
